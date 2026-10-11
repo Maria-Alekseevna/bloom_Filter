@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bloom filter + k-anonymity: демо</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1c2330; --muted: #5d687a; --line: #dfe3ea;
+    --accent: #2f6fed; --ok: #17803d; --ok-bg: #e6f5ec; --warn: #a15c00; --warn-bg: #fff3dc;
+    --bad: #b42318; --bad-bg: #fde8e6; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161d; --card: #1b212b; --text: #e8ecf3; --muted: #9aa5b8; --line: #2c3544;
+      --accent: #6a9bff; --ok: #5fd08a; --ok-bg: #153024; --warn: #f0b45a; --warn-bg: #3a2c12;
+      --bad: #ff8b7e; --bad-bg: #3b1d1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=password], input[type=text] { flex: 1 1 220px; min-width: 0; padding: 10px 12px; font-size: 1rem;
+          border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+  button { padding: 10px 16px; font-size: 1rem; border: 0; border-radius: 8px; cursor: pointer;
+           background: var(--accent); color: #fff; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); padding: 6px 10px;
+                 font-size: .85rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  label.show { color: var(--muted); font-size: .9rem; display: flex; gap: 6px; align-items: center; }
+  .samples { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+             color: var(--muted); font-size: .85rem; }
+  .result { border-radius: 10px; padding: 12px 14px; margin-top: 14px; display: none; }
+  .result.ok { background: var(--ok-bg); color: var(--ok); }
+  .result.warn { background: var(--warn-bg); color: var(--warn); }
+  .result.bad { background: var(--bad-bg); color: var(--bad); }
+  .result b { display: block; font-size: 1.05rem; }
+  ol.steps { list-style: none; padding: 0; margin: 12px 0 0; }
+  ol.steps li { padding: 6px 0 6px 28px; position: relative; color: var(--muted); font-size: .92rem;
+                border-top: 1px dashed var(--line); }
+  ol.steps li:first-child { border-top: 0; }
+  ol.steps li::before { content: "•"; position: absolute; left: 8px; color: var(--accent); }
+  ol.steps li.skip { opacity: .55; }
+  ol.steps li.skip::before { content: "–"; }
+  code, .mono { font-family: var(--mono); font-size: .88em; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stat { text-align: center; padding: 10px 4px; border: 1px solid var(--line); border-radius: 10px; }
+  .stat .v { font-size: 1.5rem; font-weight: 600; }
+  .stat .l { font-size: .78rem; color: var(--muted); }
+  @media (max-width: 520px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .log { font-family: var(--mono); font-size: .82rem; color: var(--muted); max-height: 180px; overflow: auto; }
+  .log div { padding: 2px 0; border-top: 1px dashed var(--line); }
+  .log div:first-child { border-top: 0; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  .note { color: var(--muted); font-size: .85rem; margin: 8px 0 0; }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Проверка пароля по утечкам</h1>
+  <p class="sub">Bloom filter + k-anonymity. Пароль не покидает эту страницу.</p>
+
+  <div class="card">
+    <div class="row">
+      <input id="pw" type="password" placeholder="Введите пароль" autocomplete="off" spellcheck="false">
+      <button id="go" disabled>Проверить</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="show"><input type="checkbox" id="show"> показать пароль</label>
+    </div>
+    <div class="samples">Примеры:
+      <button class="ghost" data-pw="123456">123456</button>
+      <button class="ghost" data-pw="password">password</button>
+      <button class="ghost" data-pw="iloveyou">iloveyou</button>
+      <button class="ghost" data-pw="qX7#mP9$zL2vNw8">qX7#mP9$zL2vNw8</button>
+    </div>
+    <div id="result" class="result"></div>
+    <ol id="steps" class="steps"></ol>
+  </div>
+
+  <div class="card">
+    <h2>Сколько проверок обошлось без сети</h2>
+    <div class="stats">
+      <div class="stat"><div class="v" id="s-total">0</div><div class="l">проверок</div></div>
+      <div class="stat"><div class="v" id="s-local">0</div><div class="l">закрыто локально</div></div>
+      <div class="stat"><div class="v" id="s-net">0</div><div class="l">запросов к серверу</div></div>
+      <div class="stat"><div class="v" id="s-share">–</div><div class="l">доля без сети</div></div>
+    </div>
+    <p class="note" id="info">Загрузка фильтра…</p>
+  </div>
+
+  <div class="card">
+    <h2>Что ушло на сервер</h2>
+    <div class="log" id="log"><div>пока ничего</div></div>
+    <p class="note">Только 5 первых символов SHA-1 хеша. Сам пароль и полный хеш серверу не передаются,
+      итоговое решение принимает браузер.</p>
+  </div>
+</main>
+
+<script>
+"use strict";
+const PREFIX_LEN = 5;
+let bloom = null;                       // {m, k, bits}
+const stats = { total: 0, local: 0, net: 0 };
+
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+
+async function loadBloom() {
+  const buf = await (await fetch("/bloom.bin")).arrayBuffer();
+  const metaLen = new DataView(buf).getUint32(0, true);          // 4 байта: длина заголовка
+  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, metaLen)));
+  bloom = { m: BigInt(meta.m), k: meta.k, bits: new Uint8Array(buf, 4 + metaLen) };
+  const info = await (await fetch("/info")).json();
+  $("info").textContent =
+    `Локальный фильтр: ${info.passwords} паролей из ${info.source}, целевой FPR ${(info.fpr * 100).toFixed(2)}%, ` +
+    `k = ${info.k}, размер ${(info.bloom_bytes / 1024).toFixed(1)} КБ. Он уже загружен в браузер.`;
+  $("go").disabled = false;
+}
+
+// Те же позиции, что в bloom_filter.py: SHA-256, два uint64 (little-endian), h2 нечётный,
+// position_i = (h1 + i*h2) mod m
+async function bloomContains(password) {
+  const d = new DataView(await crypto.subtle.digest("SHA-256", enc.encode(password)));
+  const h1 = d.getBigUint64(0, true);
+  const h2 = d.getBigUint64(8, true) | 1n;
+  for (let i = 0; i < bloom.k; i++) {
+    const pos = (h1 + BigInt(i) * h2) % bloom.m;
+    if (!(bloom.bits[Number(pos >> 3n)] & (1 << Number(pos & 7n)))) return false;
+  }
+  return true;
+}
+
+async function sha1Hex(password) {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-1", enc.encode(password)));
+  return Array.from(d, (b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function addStep(text, skipped) {
+  const li = document.createElement("li");
+  if (skipped) li.className = "skip";
+  li.textContent = text;
+  $("steps").appendChild(li);
+}
+
+function setResult(kind, title, text) {
+  const r = $("result");
+  r.className = "result " + kind;
+  r.style.display = "block";
+  r.textContent = "";
+  const b = document.createElement("b");
+  b.textContent = title;
+  r.appendChild(b);
+  r.appendChild(document.createTextNode(text));
+}
+
+function logLine(text, isErr) {
+  const log = $("log");
+  if (!log.dataset.used) { log.textContent = ""; log.dataset.used = "1"; }
+  const div = document.createElement("div");
+  div.textContent = text;
+  if (isErr) div.className = "err";
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderStats() {
+  $("s-total").textContent = stats.total;
+  $("s-local").textContent = stats.local;
+  $("s-net").textContent = stats.net;
+  $("s-share").textContent = stats.total ? Math.round((stats.local / stats.total) * 100) + "%" : "–";
+}
+
+async function check() {
+  const password = $("pw").value;
+  if (!password || !bloom) return;
+  $("go").disabled = true;
+  $("steps").textContent = "";
+  stats.total++;
+  try {
+    addStep("1. Локальный Bloom filter проверяет пароль в браузере.");
+    if (!(await bloomContains(password))) {
+      stats.local++;
+      addStep("Хотя бы один бит равен 0: пароля точно нет в базе.");
+      addStep("2–4. Запрос к серверу не нужен, ничего не отправлено.", true);
+      setResult("ok", "Пароль не найден в базе утечек",
+        " Проверка выполнена полностью локально, без сетевого запроса.");
+    } else {
+      addStep("Все k битов равны 1: пароль возможно есть в базе, нужна проверка.");
+      const h = await sha1Hex(password);
+      const prefix = h.slice(0, PREFIX_LEN), suffix = h.slice(PREFIX_LEN);
+      addStep(`2. Браузер считает SHA-1 и берёт префикс ${prefix}. Остальные ${suffix.length} символов остаются у клиента.`);
+      logLine(`GET /range/${prefix}`);
+      const resp = await fetch("/range/" + prefix);
+      if (!resp.ok) throw new Error("сервер ответил " + resp.status);
+      const suffixes = (await resp.text()).split("\n").filter(Boolean);
+      stats.net++;
+      logLine(`  ответ: ${suffixes.length} суффиксов с префиксом ${prefix}`);
+      addStep(`3. Сервер вернул ${suffixes.length} суффиксов, неотличимых друг от друга для сервера.`);
+      const leaked = suffixes.includes(suffix);
+      addStep(`4. Браузер сам ищет свой суффикс в ответе: ${leaked ? "найден" : "не найден"}.`);
+      if (leaked) {
+        setResult("bad", "Пароль найден в утечках",
+          " Не используйте его. Сервер подтвердил совпадение, не узнав сам пароль.");
+      } else {
+        setResult("warn", "Ложное срабатывание Bloom filter",
+          " Фильтр сказал «возможно есть», но сервер не подтвердил. Пароль в базе утечек отсутствует.");
+      }
+    }
+  } catch (e) {
+    stats.total--;
+    setResult("bad", "Ошибка", " " + e.message);
+    logLine("ошибка: " + e.message, true);
+  }
+  renderStats();
+  $("go").disabled = false;
+}
+
+$("go").addEventListener("click", check);
+$("pw").addEventListener("keydown", (e) => { if (e.key === "Enter") check(); });
+$("show").addEventListener("change", (e) => { $("pw").type = e.target.checked ? "text" : "password"; });
+document.querySelectorAll("button[data-pw]").forEach((b) =>
+  b.addEventListener("click", () => { $("pw").value = b.dataset.pw; check(); }));
+
+loadBloom().catch((e) => { $("info").textContent = "Не удалось загрузить фильтр: " + e.message; });
+renderStats();
+</script>
+</body>
+</html>
