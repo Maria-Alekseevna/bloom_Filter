@@ -1,0 +1,3 @@
+structure,dataset_unique_passwords,memory_bytes_estimated,memory_mib_estimated,absent_probes,absent_hits_or_false_positives,absent_query_total_seconds,absent_query_average_microseconds,present_probes,present_false_negatives,present_query_total_seconds,present_query_average_microseconds,dataset_load_seconds,seed
+bloom_filter,14344390,17186477,16.39030170440674,100000,1072,0.23261687500053085,2.3261687500053085,10000,0,0.03813120900304057,3.8131209003040567,5.350286041008076,20261019
+python_set,14344390,1365672160,1302.4064636230469,100000,0,0.011748666991479695,0.11748666991479695,10000,0,0.0019020000181626529,0.19020000181626529,5.350286041008076,20261019
